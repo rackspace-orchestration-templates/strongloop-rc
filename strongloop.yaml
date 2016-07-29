@@ -1,0 +1,179 @@
+heat_template_version: 2013-05-23
+
+description: |
+  Single Linux server running the latest version of
+  [StrongLoop](http://strongloop.com).
+
+  This template will only function with RackConnect v3.
+parameter_groups:
+
+- label: Server Settings
+  parameters:
+  - flavor
+  - image
+  - install_redis
+
+- label: RackConnect Settings
+  parameters:
+  - rc_network_name
+
+- label: rax-dev-params
+  # These are parameters that will not be displayed in the portal. The purpose
+  # of these parameters are for users who are developing or testing newer or
+  # different setups. If any of these parameters are changed, there is a good
+  # chance this stack will fail to properly deploy.
+  parameters:
+  - kitchen
+  - chef_version
+
+parameters:
+
+  image:
+    label: Operating System
+    description: Server Image
+    type: string
+    default: Ubuntu 12.04 LTS (Precise Pangolin) (PVHVM)
+    constraints:
+    - allowed_values:
+      - Ubuntu 12.04 LTS (Precise Pangolin) (PVHVM)
+      description: Must be a supported operating system.
+
+  flavor:
+    label: Server Size
+    description: Rackspace Cloud Server flavor
+    type: string
+    default: 2 GB General Purpose v1
+    constraints:
+    - allowed_values:
+      - 1 GB General Purpose v1
+      - 2 GB General Purpose v1
+      - 4 GB General Purpose v1
+      - 8 GB General Purpose v1
+      - 15 GB I/O v1
+      - 30 GB I/O v1
+      - 512MB Standard Instance
+      - 1GB Standard Instance
+      - 2GB Standard Instance
+      - 4GB Standard Instance
+      - 8GB Standard Instance
+      - 15GB Standard Instance
+      - 30GB Standard Instance
+      description: |
+        Must be a valid Rackspace Cloud Server flavor for the region you have
+        selected to deploy into.
+
+  install_redis:
+    label: Install Redis
+    description: If selected, this will install a local installation of Redis.
+    type: boolean
+    default: false
+
+  kitchen:
+    label: Kitchen
+    description: URL for the kitchen to use
+    type: string
+    default: https://github.com/rackspace-orchestration-templates/strongloop-rc
+
+  chef_version:
+    label: Chef Version
+    description: Version of chef client to use
+    type: string
+    default: 11.14.6
+
+  rc_network_name:
+    type: string
+    label: RackConnect Network
+    description: Name or UUID of RackConnected network to attach this server to
+    constraints:
+    - custom_constraint: rackconnect.network
+    immutable: true
+resources:
+
+  strongloop_password:
+    type: "OS::Heat::RandomString"
+    properties:
+      length: 16
+      sequence: lettersdigits
+
+  ssh_key:
+    type: "OS::Nova::KeyPair"
+    properties:
+      name: { get_param: "OS::stack_id" }
+      save_private_key: true
+
+  strongloop_server:
+    type: "OS::Nova::Server"
+    properties:
+      name: strongloop
+      flavor: { get_param: flavor }
+      image: { get_param: image }
+      key_name: { get_resource: ssh_key }
+      networks:
+      - network: { get_param: rc_network_name }
+      - network: 11111111-1111-1111-1111-111111111111
+
+  strongloop_server_public_ip:
+    type: Rackspace::RackConnect::PublicIP
+    depends_on: strongloop_server
+    properties:
+      server_id: { get_resource: strongloop_server }
+
+  strongloop_server_setup:
+    type: "OS::Heat::ChefSolo"
+    depends_on: strongloop_server
+    properties:
+      username: root
+      private_key: { get_attr: [ssh_key, private_key] }
+      host: { get_attr: [strongloop_server, networks, private, 0] }
+      kitchen: { get_param: kitchen }
+      chef_version: { get_param: chef_version }
+      node:
+        strongloop:
+          databag_name: secrets
+          npm_pkgs: ['redis']
+          username: strongloop
+          project_name: loopback-example-app
+        redisio:
+          default_settings:
+            address: localhost
+          servers:
+            - name: redis
+              port: 6379
+        redis-helper:
+          run: { get_param: install_redis }
+        run_list: ["recipe[apt]",
+                   "recipe[build-essential]",
+                   "recipe[strongloop]",
+                   "recipe[strongloop::firewall]",
+                   "recipe[redis-helper]"]
+      data_bags:
+        secrets:
+          encrypted: true
+          id: secrets
+          strongloop:
+            password: { get_attr: [strongloop_password, value] }
+
+outputs:
+  private_key:
+    description: SSH Private Key
+    value: { get_attr: [ssh_key, private_key] }
+
+  server_ip:
+    description: Server IP
+    value: { get_attr: [strongloop_server, accessIPv4] }
+
+  strongloop_username:
+    description: StrongLoop Username
+    value: strongloop
+
+  strongloop_password:
+    description: StrongLoop Password
+    value: { get_attr: [strongloop_password, value] }
+
+  strongloop_url:
+    description: StrongLoop URL
+    value:
+      str_replace:
+        template: "http://%server_ip%:3000"
+        params:
+          "%server_ip%": { get_attr: [strongloop_server, accessIPv4] }
