@@ -72,6 +72,7 @@ instructions: |
   ```
 user-input-required: true
 description: |
+  ####Single Linux server - RCv3
   Single Linux server running the latest version of
   [StrongLoop](http://strongloop.com).
 
